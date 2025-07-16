@@ -2,11 +2,9 @@ import os
 import re
 import imaplib
 import email
-from email.header import decode_header
 from datetime import datetime
 import logging
 import requests
-import json
 from fpdf import FPDF
 import shutil
 
@@ -111,34 +109,29 @@ class FeishuApplication:
             name = os.path.basename(path)
             file_size = os.path.getsize(path)
             
-            files = {
-                'file_name': (None, name),
-                'parent_type': (None, 'bitable_file'),
-                'parent_node': (None, FEISHU_BITABLE_APP_TOKEN),
-                'size': (None, str(file_size)),
-                'file': (name, open(path, 'rb'), 'application/pdf')
-            }
-            
-            headers = {k: v for k, v in self.headers.items() if k.lower() != 'content-type'}
-            response = requests.post(url, headers=headers, files=files)
-            response.raise_for_status()
-            data = response.json()
-            
-            if data.get("code") == 0:
-                return data['data']['file_token']
-            else:
-                logging.error(f"文件上传失败：{response.text}")
-                return None
+            with open(path, 'rb') as file:
+                files = {
+                    'file_name': (None, name),
+                    'parent_type': (None, 'bitable_file'),
+                    'parent_node': (None, FEISHU_BITABLE_APP_TOKEN),
+                    'size': (None, str(file_size)),
+                    'file': (name, file, 'application/pdf')
+                }
                 
+                headers = {k: v for k, v in self.headers.items() if k.lower() != 'content-type'}
+                response = requests.post(url, headers=headers, files=files)
+                response.raise_for_status()
+                data = response.json()
+                
+                if data.get("code") == 0:
+                    return data['data']['file_token']
+                else:
+                    logging.error(f"文件上传失败：{response.text}")
+                    return None
+                    
         except Exception as e:
             logging.error(f"上传文件出错: {e}")
             return None
-        finally:
-            if 'files' in locals() and 'file' in files:
-                try:
-                    files['file'][1].close()
-                except:
-                    pass
 
     def write_records_to_bitable(self, app_token, table_id, records):
         """写入记录到多维表格"""
@@ -304,7 +297,7 @@ def main():
         logging.critical("无法获取Token")
         return
 
-    daily_token, url = robot.create_folder(
+    daily_token, _ = robot.create_folder(
         datetime.now().strftime("%Y-%m-%d"),
         FEISHU_PARENT_NODE
     )
