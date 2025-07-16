@@ -8,17 +8,17 @@ import logging
 import requests
 import json
 from fpdf import FPDF
+import shutil
 
-# =================================================================================
-# === 配置区 (已根据最新信息确认) ===
-# =================================================================================
+# 配置区
 IMAP_URL = 'imap.gmail.com'
 EMAIL_USER = 'zoey.yuan@anker.com'
 EMAIL_PASS = 'lxau jhmd ylvi ewvj'
 VALID_SENDERS = ["Donna.Villani@directed.com.au"]
 ATTACHMENT_PATTERN = re.compile(r'^AP Credit Memo.*\.pdf$', re.IGNORECASE)
+EMAIL_START_DATE = "11-Jul-2025"
 EMAIL_SENT_DATE = "15-Jul-2025"
-BASE_SAVE_DIR = os.path.expanduser('~/Desktop/CN发票下载')  # 使用当前用户目录
+BASE_SAVE_DIR = os.path.expanduser('~/Desktop/CN发票下载')
 FONT_PATH = '/System/Library/Fonts/STHeiti Medium.ttc'
 FEISHU_APP_ID = "cli_a702c225665e100d"
 FEISHU_APP_SECRET = "5D7PoQaMtb8Er1qqfUnGpfcYiFekaX2b"
@@ -27,9 +27,6 @@ FEISHU_BITABLE_APP_TOKEN = "H0MSb4s0vaJ1VXsxq5Kcc9DCnKg"
 FEISHU_BITABLE_TABLE_ID = "tbldq9wHDecaWW7B"
 
 
-# =================================================================================
-# === 功能模块 (无需修改) ===
-# =================================================================================
 def setup_logging(log_base_dir):
     """设置日志记录"""
     log_dir = os.path.join(log_base_dir, "logs")
@@ -71,7 +68,6 @@ class FeishuApplication:
             data = response.json()
             
             if data.get('code') == 0:
-                logging.info('获取token成功')
                 return data['tenant_access_token']
             else:
                 logging.error(f'获取token失败：{response.text}')
@@ -98,53 +94,40 @@ class FeishuApplication:
             if data.get("code") == 0:
                 return data['data']['token'], data['data']['url']
             else:
-                logging.error(f'建文件夹失败：{response.text}')
+                logging.error(f'创建文件夹失败：{response.text}')
                 return None, None
         except Exception as e:
-            logging.error(f"建文件夹出错: {e}")
+            logging.error(f"创建文件夹出错: {e}")
             return None, None
 
     def upload_file(self, path, parent):
-        """上传文件到云空间文件夹（支持wiki空间）"""
+        """上传文件到云空间"""
         if not self._token or not os.path.isfile(path):
             return None
         
-        # 检查是否为wiki空间下的文件夹
-        # wiki空间的文件夹token通常以特定前缀开头
         url = 'https://open.feishu.cn/open-apis/drive/v1/files/upload_all'
         
         try:
             name = os.path.basename(path)
             file_size = os.path.getsize(path)
             
-            # 构建正确的multipart/form-data格式
             files = {
                 'file_name': (None, name),
-                'parent_type': (None, 'bitable_file'),  # 对于wiki空间也使用explorer
-                'parent_node': (None, FEISHU_BITABLE_APP_TOKEN),       # 父文件夹token
-                'size': (None, str(file_size)),      # 文件大小
+                'parent_type': (None, 'bitable_file'),
+                'parent_node': (None, FEISHU_BITABLE_APP_TOKEN),
+                'size': (None, str(file_size)),
                 'file': (name, open(path, 'rb'), 'application/pdf')
-                # 'extra': (None, json.dumps({"drive_route_token":"A8IDwivqLiAovzksBkzcfj3GnCb"}))
             }
             
-            # 对于wiki空间，可能需要特殊的headers
             headers = {k: v for k, v in self.headers.items() if k.lower() != 'content-type'}
-            
-            # 添加wiki空间支持的额外参数（如果需要）
-            # headers['X-Space-Type'] = 'wiki'  # 根据实际API要求添加
-            
             response = requests.post(url, headers=headers, files=files)
             response.raise_for_status()
             data = response.json()
             
             if data.get("code") == 0:
-                logging.info(f"文件'{name}'上传成功到wiki空间")
                 return data['data']['file_token']
             else:
-                logging.error(f"文件'{name}'上传失败：{response.text}")
-                # 如果是权限错误，提供详细的错误信息
-                if 'AttachPermNotAllow' in response.text:
-                    logging.error("权限错误：请确保应用已添加到wiki页面并具有编辑权限")
+                logging.error(f"文件上传失败：{response.text}")
                 return None
                 
         except Exception as e:
@@ -159,20 +142,11 @@ class FeishuApplication:
 
     def write_records_to_bitable(self, app_token, table_id, records):
         """写入记录到多维表格"""
-        if not self._token:
-            logging.error("无法写入：无效Token")
+        if not self._token or not records:
             return False
         
-        if not records:
-            logging.info("无数据写入")
-            return True
-        
         url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_create"
-        payload = {"records": [{"fields": r} for r in records]}  # 修正payload格式
-        
-        logging.info(f"准备写入多维表格: app_token={app_token}, table_id={table_id}")
-        logging.info(f"请求URL: {url}")
-        logging.info(f"请求数据: {json.dumps(payload, ensure_ascii=False, indent=2)}")
+        payload = {"records": [{"fields": r} for r in records]}
         
         try:
             response = requests.post(
@@ -181,16 +155,13 @@ class FeishuApplication:
                 json=payload
             )
             
-            logging.info(f"响应状态码: {response.status_code}")
-            logging.info(f"响应内容: {response.text}")
-            
             if response.status_code == 200:
                 data = response.json()
                 if data.get("code") == 0:
-                    logging.info(f"✅ 成功向多维表格写入 {len(records)} 条记录")
+                    logging.info(f"成功写入 {len(records)} 条记录")
                     return True
                 else:
-                    logging.error(f"❌ API返回错误: {data.get('msg', '未知错误')}")
+                    logging.error(f"API返回错误: {data.get('msg', '未知错误')}")
                     return False
             else:
                 logging.error(f"写入HTTP错误: {response.text}")
@@ -207,18 +178,14 @@ def save_text_as_pdf(text, path):
         pdf = FPDF()
         pdf.add_page()
         
-        # 改进字体处理
         try:
             if os.path.exists(FONT_PATH):
                 pdf.add_font('Heiti', '', FONT_PATH, uni=True)
                 pdf.set_font('Heiti', size=12)
             else:
-                # 使用内置字体处理英文内容
                 pdf.set_font('Arial', size=12)
-                # 过滤非ASCII字符
                 text = text.encode('ascii', 'ignore').decode('ascii')
-        except Exception as font_error:
-            logging.warning(f"字体加载失败，使用默认字体: {font_error}")
+        except Exception:
             pdf.set_font('Arial', size=12)
             text = text.encode('ascii', 'ignore').decode('ascii')
         
@@ -233,103 +200,82 @@ def save_text_as_pdf(text, path):
 def process_and_upload_emails(feishu_robot, daily_folder_token):
     """处理和上传邮件"""
     records = []
-    
-    # 创建临时目录
     temp_dir = os.path.join(BASE_SAVE_DIR, "temp")
     os.makedirs(temp_dir, exist_ok=True)
     
     try:
-        # 连接邮箱
         mail = imaplib.IMAP4_SSL(IMAP_URL)
         mail.login(EMAIL_USER, EMAIL_PASS)
         mail.select('Inbox')
         
-        # 遍历有效发件人
         for sender in VALID_SENDERS:
-            _, data = mail.search(None, f'(FROM "{sender}" SENTON {EMAIL_SENT_DATE})')
+            search_criteria = f'(FROM "{sender}" SINCE "{EMAIL_START_DATE}" BEFORE "{EMAIL_SENT_DATE}")'
+            _, data = mail.search(None, search_criteria)
             
             for mail_id in data[0].split():
                 try:
-                    # 获取邮件内容
                     _, msg_data = mail.fetch(mail_id, '(RFC822)')
                     msg = email.message_from_bytes(msg_data[0][1])
                     
-                    # 解析邮件主题（保留用于日志记录）
-                    subject, encoding = decode_header(msg['Subject'])[0]
-                    subject = subject.decode(encoding or 'utf-8') if isinstance(subject, bytes) else subject
-                    
-                    # 初始化变量
                     attachment_token = None
                     body_token = None
                     email_body = ""
                     memo_id = None
                     
-                    # 解析邮件内容
                     if msg.is_multipart():
                         for part in msg.walk():
                             content_type = part.get_content_type()
                             content_disposition = str(part.get("Content-Disposition"))
                             
-                            # 处理PDF附件
                             if "attachment" in content_disposition:
                                 filename = part.get_filename()
                                 if filename and ATTACHMENT_PATTERN.match(filename):
-                                    # 从附件名提取Credit Memo ID
                                     match = re.search(r'Credit Memo[_\s]*([\d]+)', filename, re.IGNORECASE)
                                     if match:
                                         memo_id = match.group(1)
                                         base_name = f"Credit Memo_{memo_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                                         
-                                        # 创建ID文件夹
                                         id_folder_token, _ = feishu_robot.create_folder(memo_id, daily_folder_token)
                                         if id_folder_token:
                                             path = os.path.join(temp_dir, f"{base_name}.pdf")
                                             with open(path, 'wb') as f:
                                                 f.write(part.get_payload(decode=True))
                                             
-                                            # 上传附件获取file_token
                                             attachment_token = feishu_robot.upload_file(path, id_folder_token)
                                             if os.path.exists(path):
                                                 os.remove(path)
                             
-                            # 提取邮件正文
                             elif content_type == "text/plain" and "attachment" not in content_disposition:
                                 try:
                                     body_content = part.get_payload(decode=True)
                                     if body_content:
                                         email_body += body_content.decode('utf-8', errors='ignore')
-                                except Exception as e:
-                                    logging.warning(f"解析邮件正文失败: {e}")
+                                except Exception:
+                                    pass
                     else:
-                        # 非多部分邮件，直接获取正文
                         try:
                             email_body = msg.get_payload(decode=True).decode('utf-8', errors='ignore')
-                        except Exception as e:
-                            logging.warning(f"解析邮件正文失败: {e}")
+                        except Exception:
+                            pass
                     
-                    # 如果没有找到有效的附件，跳过这封邮件
                     if not memo_id or not attachment_token:
                         continue
                     
-                    # 处理邮件正文PDF
                     if attachment_token and email_body.strip():
                         base_name = f"Credit Memo_{memo_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                         path = os.path.join(temp_dir, f"{base_name}_body.pdf")
                         if save_text_as_pdf(email_body, path):
-                            # 重新获取文件夹token（因为在附件处理中已创建）
                             id_folder_token, _ = feishu_robot.create_folder(memo_id, daily_folder_token)
                             if id_folder_token:
-                                # 上传邮件正文PDF获取file_token
                                 body_token = feishu_robot.upload_file(path, id_folder_token)
                             if os.path.exists(path):
                                 os.remove(path)
                     
-                    # 构建多维表格记录
                     if attachment_token and memo_id:
                         new_record = {
                             "CN_NO": memo_id,
-                            "AP_Credit_Note": [{"file_token": attachment_token}],  # 附件字段格式
-                            "Email": [{"file_token": body_token}] if body_token else []  # 可选的邮件正文
+                            "AP_Credit_Note": [{"file_token": attachment_token}],
+                            "Email": [{"file_token": body_token}] if body_token else []
                         }
                         records.append(new_record)
                         
@@ -339,39 +285,25 @@ def process_and_upload_emails(feishu_robot, daily_folder_token):
         
         mail.logout()
         
-        # 清理临时目录
-        if os.path.exists(temp_dir):
-            import shutil
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        
-        return records
-        
     except Exception as e:
         logging.error(f"主流程出错: {e}")
-        # 清理临时目录
+    finally:
         if os.path.exists(temp_dir):
-            import shutil
             shutil.rmtree(temp_dir, ignore_errors=True)
-        return []
+    
+    return records
 
 
 def main():
     """主函数"""
     setup_logging(BASE_SAVE_DIR)
-    logging.info("============ 任务开始 ============")
+    logging.info("任务开始")
     
-    # 改进字体文件检查
-    if not os.path.exists(FONT_PATH):
-        logging.warning("字体文件不存在，将跳过邮件正文PDF生成")
-        # 不要直接返回，继续执行其他功能
-
-    # 初始化飞书机器人
     robot = FeishuApplication(FEISHU_APP_ID, FEISHU_APP_SECRET)
     if not robot._token:
         logging.critical("无法获取Token")
         return
 
-    # 创建日度文件夹
     daily_token, url = robot.create_folder(
         datetime.now().strftime("%Y-%m-%d"),
         FEISHU_PARENT_NODE
@@ -380,14 +312,9 @@ def main():
         logging.critical("无法创建日度文件夹")
         return
     
-    logging.info(f"日度文件夹已就绪: {url}")
-    
-    # 处理邮件并收集记录
     records_to_write = process_and_upload_emails(robot, daily_token)
 
-    # 写入多维表格
     if records_to_write:
-        logging.info(f"准备将 {len(records_to_write)} 条记录写入多维表格...")
         success = robot.write_records_to_bitable(
             FEISHU_BITABLE_APP_TOKEN,
             FEISHU_BITABLE_TABLE_ID,
@@ -395,17 +322,13 @@ def main():
         )
         
         if success:
-            logging.info("✅ 多维表格写入成功")
+            logging.info("多维表格写入成功")
         else:
-            logging.error("❌ 多维表格写入失败，请检查配置参数")
-            # 输出收集到的数据作为备用
-            logging.info("📋 收集到的数据如下：")
-            for i, record in enumerate(records_to_write, 1):
-                logging.info(f"  记录 {i}: CN_NO={record['CN_NO']}, 附件已上传")
+            logging.error("多维表格写入失败")
     else:
         logging.info("未生成任何有效记录")
     
-    logging.info("============ 任务执行完毕 ============\n")
+    logging.info("任务执行完毕")
 
 
 if __name__ == "__main__":
