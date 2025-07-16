@@ -254,27 +254,15 @@ def process_and_upload_emails(feishu_robot, daily_folder_token):
                     _, msg_data = mail.fetch(mail_id, '(RFC822)')
                     msg = email.message_from_bytes(msg_data[0][1])
                     
-                    # 解析邮件主题
+                    # 解析邮件主题（保留用于日志记录）
                     subject, encoding = decode_header(msg['Subject'])[0]
                     subject = subject.decode(encoding or 'utf-8') if isinstance(subject, bytes) else subject
-                    
-                    # 匹配Credit Memo ID
-                    match = re.search(r'Credit Memo_\s*(\d+)', subject, re.IGNORECASE)
-                    if not match:
-                        continue
-                    
-                    memo_id = match.group(1)
-                    base_name = f"Credit Memo_{memo_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                    
-                    # 创建ID文件夹
-                    id_folder_token, _ = feishu_robot.create_folder(memo_id, daily_folder_token)
-                    if not id_folder_token:
-                        continue
                     
                     # 初始化变量
                     attachment_token = None
                     body_token = None
                     email_body = ""
+                    memo_id = None
                     
                     # 解析邮件内容
                     if msg.is_multipart():
@@ -286,14 +274,23 @@ def process_and_upload_emails(feishu_robot, daily_folder_token):
                             if "attachment" in content_disposition:
                                 filename = part.get_filename()
                                 if filename and ATTACHMENT_PATTERN.match(filename):
-                                    path = os.path.join(temp_dir, f"{base_name}.pdf")
-                                    with open(path, 'wb') as f:
-                                        f.write(part.get_payload(decode=True))
-                                    
-                                    # 上传附件获取file_token
-                                    attachment_token = feishu_robot.upload_file(path, id_folder_token)
-                                    if os.path.exists(path):
-                                        os.remove(path)
+                                    # 从附件名提取Credit Memo ID
+                                    match = re.search(r'Credit Memo[_\s]*([\d]+)', filename, re.IGNORECASE)
+                                    if match:
+                                        memo_id = match.group(1)
+                                        base_name = f"Credit Memo_{memo_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                                        
+                                        # 创建ID文件夹
+                                        id_folder_token, _ = feishu_robot.create_folder(memo_id, daily_folder_token)
+                                        if id_folder_token:
+                                            path = os.path.join(temp_dir, f"{base_name}.pdf")
+                                            with open(path, 'wb') as f:
+                                                f.write(part.get_payload(decode=True))
+                                            
+                                            # 上传附件获取file_token
+                                            attachment_token = feishu_robot.upload_file(path, id_folder_token)
+                                            if os.path.exists(path):
+                                                os.remove(path)
                             
                             # 提取邮件正文
                             elif content_type == "text/plain" and "attachment" not in content_disposition:
@@ -310,17 +307,25 @@ def process_and_upload_emails(feishu_robot, daily_folder_token):
                         except Exception as e:
                             logging.warning(f"解析邮件正文失败: {e}")
                     
+                    # 如果没有找到有效的附件，跳过这封邮件
+                    if not memo_id or not attachment_token:
+                        continue
+                    
                     # 处理邮件正文PDF
                     if attachment_token and email_body.strip():
+                        base_name = f"Credit Memo_{memo_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                         path = os.path.join(temp_dir, f"{base_name}_body.pdf")
                         if save_text_as_pdf(email_body, path):
-                            # 上传邮件正文PDF获取file_token
-                            body_token = feishu_robot.upload_file(path, id_folder_token)
+                            # 重新获取文件夹token（因为在附件处理中已创建）
+                            id_folder_token, _ = feishu_robot.create_folder(memo_id, daily_folder_token)
+                            if id_folder_token:
+                                # 上传邮件正文PDF获取file_token
+                                body_token = feishu_robot.upload_file(path, id_folder_token)
                             if os.path.exists(path):
                                 os.remove(path)
                     
                     # 构建多维表格记录
-                    if attachment_token:
+                    if attachment_token and memo_id:
                         new_record = {
                             "CN_NO": memo_id,
                             "AP_Credit_Note": [{"file_token": attachment_token}],  # 附件字段格式
