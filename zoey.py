@@ -7,25 +7,81 @@ import logging
 import requests
 from fpdf import FPDF
 import shutil
+from dotenv import load_dotenv
+from typing import List, Optional
 
-# 配置区
-IMAP_URL = 'imap.gmail.com'
-EMAIL_USER = 'zoey.yuan@anker.com'
-EMAIL_PASS = 'lxau jhmd ylvi ewvj'
-VALID_SENDERS = ["Donna.Villani@directed.com.au"]
-ATTACHMENT_PATTERN = re.compile(r'^AP Credit Memo.*\.pdf$', re.IGNORECASE)
-EMAIL_START_DATE = "11-Jul-2025"
-EMAIL_SENT_DATE = "15-Jul-2025"
-BASE_SAVE_DIR = os.path.expanduser('~/Desktop/CN发票下载')
-FONT_PATH = '/System/Library/Fonts/STHeiti Medium.ttc'
-FEISHU_APP_ID = "cli_a702c225665e100d"
-FEISHU_APP_SECRET = "5D7PoQaMtb8Er1qqfUnGpfcYiFekaX2b"
-FEISHU_PARENT_NODE = "W8v4f46zBlTJkldWPPmcTHqanTh"
-FEISHU_BITABLE_APP_TOKEN = "H0MSb4s0vaJ1VXsxq5Kcc9DCnKg"
-FEISHU_BITABLE_TABLE_ID = "tbldq9wHDecaWW7B"
+# 加载 .env 文件
+load_dotenv()
 
 
-def setup_logging(log_base_dir):
+class Config:
+    """配置管理类 - 统一管理所有环境变量"""
+    
+    def __init__(self):
+        # 邮件配置
+        self.IMAP_URL: str = self._get_env('IMAP_URL', 'imap.gmail.com')
+        self.EMAIL_USER: str = self._get_env('EMAIL_USER', required=True)
+        self.EMAIL_PASS: str = self._get_env('EMAIL_PASS', required=True)
+        self.VALID_SENDERS: List[str] = self._get_env(
+            'VALID_SENDERS', 
+            'Donna.Villani@directed.com.au'
+        ).split(',')
+        
+        # 邮件处理配置
+        self.ATTACHMENT_PATTERN = re.compile(r'^AP Credit Memo.*\.pdf$', re.IGNORECASE)
+        self.EMAIL_START_DATE: str = self._get_env('EMAIL_START_DATE', '11-Jul-2025')
+        self.EMAIL_SENT_DATE: str = self._get_env('EMAIL_SENT_DATE', '15-Jul-2025')
+        
+        # 文件系统配置
+        self.BASE_SAVE_DIR: str = self._get_env(
+            'BASE_SAVE_DIR', 
+            os.path.expanduser('~/Desktop/CN发票下载')
+        )
+        self.FONT_PATH: str = self._get_env(
+            'FONT_PATH', 
+            '/System/Library/Fonts/STHeiti Medium.ttc'
+        )
+        
+        # 飞书配置
+        self.FEISHU_APP_ID: str = self._get_env('FEISHU_APP_ID', required=True)
+        self.FEISHU_APP_SECRET: str = self._get_env('FEISHU_APP_SECRET', required=True)
+        self.FEISHU_PARENT_NODE: str = self._get_env('FEISHU_PARENT_NODE', required=True)
+        self.FEISHU_BITABLE_APP_TOKEN: str = self._get_env('FEISHU_BITABLE_APP_TOKEN', required=True)
+        self.FEISHU_BITABLE_TABLE_ID: str = self._get_env('FEISHU_BITABLE_TABLE_ID', required=True)
+        
+        # 验证所有必需的环境变量
+        self._validate_config()
+    
+    def _get_env(self, key: str, default: Optional[str] = None, required: bool = False) -> str:
+        """获取环境变量的统一方法"""
+        value = os.getenv(key, default)
+        if required and not value:
+            raise ValueError(f'必需的环境变量 {key} 未设置')
+        return value or ''
+    
+    def _validate_config(self) -> None:
+        """验证配置的完整性"""
+        required_fields = [
+            'EMAIL_USER', 'EMAIL_PASS', 'FEISHU_APP_ID', 'FEISHU_APP_SECRET',
+            'FEISHU_PARENT_NODE', 'FEISHU_BITABLE_APP_TOKEN', 'FEISHU_BITABLE_TABLE_ID'
+        ]
+        
+        missing_vars = []
+        for field in required_fields:
+            if not getattr(self, field, None):
+                missing_vars.append(field)
+        
+        if missing_vars:
+            raise ValueError(f'以下必需的环境变量未设置: {", ".join(missing_vars)}')
+        
+        logging.info("配置验证通过")
+
+
+# 全局配置实例
+config = Config()
+
+
+def setup_logging(log_base_dir: str) -> None:
     """设置日志记录"""
     log_dir = os.path.join(log_base_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -48,13 +104,13 @@ def setup_logging(log_base_dir):
 class FeishuApplication:
     """飞书应用接口类"""
     
-    def __init__(self, app_id, app_secret):
+    def __init__(self, app_id: str, app_secret: str):
         self.app_id = app_id
         self.app_secret = app_secret
         self._token = self.get_tenant_access_token()
         self.headers = {'Authorization': f'Bearer {self._token}'} if self._token else {}
 
-    def get_tenant_access_token(self):
+    def get_tenant_access_token(self) -> Optional[str]:
         """获取租户访问令牌"""
         url = 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal'
         try:
@@ -74,7 +130,7 @@ class FeishuApplication:
             logging.error(f"请求Token出错: {e}")
             return None
 
-    def create_folder(self, name, parent):
+    def create_folder(self, name: str, parent: str) -> tuple[Optional[str], Optional[str]]:
         """创建文件夹"""
         if not self._token:
             return None, None
@@ -98,7 +154,7 @@ class FeishuApplication:
             logging.error(f"创建文件夹出错: {e}")
             return None, None
 
-    def upload_file(self, path, parent):
+    def upload_file(self, path: str, parent: str) -> Optional[str]:
         """上传文件到云空间"""
         if not self._token or not os.path.isfile(path):
             return None
@@ -113,7 +169,7 @@ class FeishuApplication:
                 files = {
                     'file_name': (None, name),
                     'parent_type': (None, 'bitable_file'),
-                    'parent_node': (None, FEISHU_BITABLE_APP_TOKEN),
+                    'parent_node': (None, config.FEISHU_BITABLE_APP_TOKEN),
                     'size': (None, str(file_size)),
                     'file': (name, file, 'application/pdf')
                 }
@@ -133,7 +189,7 @@ class FeishuApplication:
             logging.error(f"上传文件出错: {e}")
             return None
 
-    def write_records_to_bitable(self, app_token, table_id, records):
+    def write_records_to_bitable(self, app_token: str, table_id: str, records: List[dict]) -> bool:
         """写入记录到多维表格"""
         if not self._token or not records:
             return False
@@ -165,15 +221,15 @@ class FeishuApplication:
             return False
 
 
-def save_text_as_pdf(text, path):
+def save_text_as_pdf(text: str, path: str) -> bool:
     """将文本保存为PDF"""
     try:
         pdf = FPDF()
         pdf.add_page()
         
         try:
-            if os.path.exists(FONT_PATH):
-                pdf.add_font('Heiti', '', FONT_PATH, uni=True)
+            if os.path.exists(config.FONT_PATH):
+                pdf.add_font('Heiti', '', config.FONT_PATH, uni=True)
                 pdf.set_font('Heiti', size=12)
             else:
                 pdf.set_font('Arial', size=12)
@@ -190,19 +246,37 @@ def save_text_as_pdf(text, path):
         return False
 
 
-def process_and_upload_emails(feishu_robot, daily_folder_token):
+def process_and_upload_emails(feishu_robot: FeishuApplication, daily_folder_token: str) -> List[dict]:
     """处理和上传邮件"""
     records = []
-    temp_dir = os.path.join(BASE_SAVE_DIR, "temp")
+    temp_dir = os.path.join(config.BASE_SAVE_DIR, "temp")
     os.makedirs(temp_dir, exist_ok=True)
     
     try:
-        mail = imaplib.IMAP4_SSL(IMAP_URL)
-        mail.login(EMAIL_USER, EMAIL_PASS)
+        mail = imaplib.IMAP4_SSL(config.IMAP_URL)
+        mail.login(config.EMAIL_USER, config.EMAIL_PASS)
         mail.select('Inbox')
         
-        for sender in VALID_SENDERS:
-            search_criteria = f'(FROM "{sender}" SINCE "{EMAIL_START_DATE}" BEFORE "{EMAIL_SENT_DATE}")'
+        for sender in config.VALID_SENDERS:
+            # 修改搜索条件以包含起止日期
+            # 使用 ON 或组合条件来包含边界日期
+            search_criteria = f'(FROM "{sender}" SINCE "{config.EMAIL_START_DATE}" ON "{config.EMAIL_SENT_DATE}")'
+            # 如果起止日期相同，只使用 ON
+            if config.EMAIL_START_DATE == config.EMAIL_SENT_DATE:
+                search_criteria = f'(FROM "{sender}" ON "{config.EMAIL_START_DATE}")'
+            # 如果需要日期范围，使用 SINCE 起始日期，但不使用 BEFORE 结束日期
+            else:
+                # 计算结束日期的下一天用于 BEFORE 条件
+                from datetime import datetime, timedelta
+                try:
+                    end_date = datetime.strptime(config.EMAIL_SENT_DATE, '%d-%b-%Y')
+                    next_day = end_date + timedelta(days=1)
+                    next_day_str = next_day.strftime('%d-%b-%Y')
+                    search_criteria = f'(FROM "{sender}" SINCE "{config.EMAIL_START_DATE}" BEFORE "{next_day_str}")'
+                except ValueError:
+                    # 如果日期格式解析失败，回退到原始逻辑
+                    search_criteria = f'(FROM "{sender}" SINCE "{config.EMAIL_START_DATE}" BEFORE "{config.EMAIL_SENT_DATE}")'
+            
             _, data = mail.search(None, search_criteria)
             
             for mail_id in data[0].split():
@@ -222,7 +296,7 @@ def process_and_upload_emails(feishu_robot, daily_folder_token):
                             
                             if "attachment" in content_disposition:
                                 filename = part.get_filename()
-                                if filename and ATTACHMENT_PATTERN.match(filename):
+                                if filename and config.ATTACHMENT_PATTERN.match(filename):
                                     match = re.search(r'Credit Memo[_\s]*([\d]+)', filename, re.IGNORECASE)
                                     if match:
                                         memo_id = match.group(1)
@@ -287,19 +361,19 @@ def process_and_upload_emails(feishu_robot, daily_folder_token):
     return records
 
 
-def main():
+def main() -> None:
     """主函数"""
-    setup_logging(BASE_SAVE_DIR)
+    setup_logging(config.BASE_SAVE_DIR)
     logging.info("任务开始")
     
-    robot = FeishuApplication(FEISHU_APP_ID, FEISHU_APP_SECRET)
+    robot = FeishuApplication(config.FEISHU_APP_ID, config.FEISHU_APP_SECRET)
     if not robot._token:
         logging.critical("无法获取Token")
         return
 
     daily_token, _ = robot.create_folder(
         datetime.now().strftime("%Y-%m-%d"),
-        FEISHU_PARENT_NODE
+        config.FEISHU_PARENT_NODE
     )
     if not daily_token:
         logging.critical("无法创建日度文件夹")
@@ -309,8 +383,8 @@ def main():
 
     if records_to_write:
         success = robot.write_records_to_bitable(
-            FEISHU_BITABLE_APP_TOKEN,
-            FEISHU_BITABLE_TABLE_ID,
+            config.FEISHU_BITABLE_APP_TOKEN,
+            config.FEISHU_BITABLE_TABLE_ID,
             records_to_write
         )
         
