@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# 安装 Python 3.10.12
+sudo apt-get update
+sudo apt-get install -y python3.10
+
+# 安装虚拟环境
+sudo apt-get install -y python3-venv
+
+# 创建 Python 3.10 虚拟环境
+python3.10 -m venv myenv
+
+# 激活虚拟环境
+source myenv/bin/activate
+pip install openpyxl
+
+虚拟环境脚本
