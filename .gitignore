@@ -67,3 +67,12 @@ Template.xlsx
 
 # 下载目录
 CN发票下载/
+
+# 忽略的项目文件
+client.py
+copyTemplate.py
+ga.py
+ga_qa.csv
+queryByHandle.py
+
+
