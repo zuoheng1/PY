@@ -267,7 +267,6 @@ def process_and_upload_emails(feishu_robot: FeishuApplication, daily_folder_toke
             # 如果需要日期范围，使用 SINCE 起始日期，但不使用 BEFORE 结束日期
             else:
                 # 计算结束日期的下一天用于 BEFORE 条件
-                from datetime import datetime, timedelta
                 try:
                     end_date = datetime.strptime(config.EMAIL_SENT_DATE, '%d-%b-%Y')
                     next_day = end_date + timedelta(days=1)
