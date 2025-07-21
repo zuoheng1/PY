@@ -2,7 +2,7 @@ import os
 import re
 import imaplib
 import email
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import requests
 from fpdf import FPDF
