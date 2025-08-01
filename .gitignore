@@ -133,12 +133,6 @@ CN发票下载/
 downloads/
 temp/
 
-# 忽略的项目文件
-client.py
-copyTemplate.py
-ga.py
-ga_qa.csv
-queryByHandle.py
 
 # 密钥和证书
 *.pem
