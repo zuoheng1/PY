@@ -5,6 +5,7 @@ env/
 .venv/
 .env/
 pyvenv.cfg
+./invoice-processing/.env
 
 # Python 缓存文件
 __pycache__/
@@ -29,7 +30,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-PIPFILE.lock
+Pipfile.lock
 
 # PyInstaller
 *.manifest
@@ -77,6 +78,7 @@ service-account-key.json
 .env.test.local
 .env.production.local
 .env.*.local
+!.env.example
 
 # 日志文件
 *.log
@@ -90,6 +92,7 @@ logs/
 *.swp
 *.swo
 *~
+temp/
 
 # 系统文件
 .DS_Store
@@ -114,7 +117,6 @@ desktop.ini
 ~$*.docx
 
 # 项目特定文件
-Template.xlsx
 *.html
 *.js
 !important.js
@@ -125,14 +127,12 @@ results.xlsx
 output.xlsx
 *.csv
 !url.xlsx
-!template.xlsx
 !requirements.txt
+!库存分析.xlsx
 
 # 下载目录
 CN发票下载/
 downloads/
-temp/
-
 
 # 密钥和证书
 *.pem
@@ -171,5 +171,25 @@ dmypy.json
 .bandit
 .coverage
 .coverage.*
+
+# PDF 文件（由程序生成）
+*.pdf
+
+# 邮件处理相关
+attachments/
+email_temp/
+
+# 飞书相关临时文件
+feishu_temp/
+
+# 项目特定的模板文件保护
+!Template.xlsx
+
+# 脚本文件
+script.html
+
+# 备份文件
+*.backup
+*.orig
 
 
