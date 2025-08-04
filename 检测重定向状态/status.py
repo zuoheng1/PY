@@ -26,7 +26,7 @@ def load_urls_from_excel(file_path):
                     url_path = '/' + url_path
                 
                 # 添加www.anker.com前缀
-                full_url = 'https://www.anker.com' + url_path
+                full_url = "https://www.anker.com/au/collections/wireless-chargers"
                 urls.append(full_url)
         
         workbook.close()
