@@ -209,7 +209,10 @@ class Link404Crawler:
         position_str = " > ".join(reversed(positions)) if positions else "页面主体"
         
         # 生成CSS选择器
-        css_selector = self._generate_css_selector(element)
+        css_selector = self._generate_enhanced_css_selector(element)
+        
+        # 保存当前元素用于后续处理
+        self._current_element = element
         
         # 生成XPath
         xpath = self._generate_xpath(element)
@@ -400,28 +403,40 @@ class Link404Crawler:
         }
     
     def _handle_404_link(self, parent_url, link_url, position_info, link_status):
-        """处理404链接"""
+        """处理404链接 - 增强版"""
         filter_indicator = "🎯" if self.matches_path_filter(link_url) else "⚪"
         logger.info(f"    {filter_indicator} ❌ 404: {link_url}")
         logger.info(f"         📍 位置: [{position_info['visual_position']}]")
-        logger.info(f"         🎯 CSS选择器: {position_info.get('css_selector', '未生成')}")
+        
+        # 显示增强的选择器信息
+        css_selector = position_info.get('css_selector', '未生成')
+        logger.info(f"         🎯 CSS选择器: {css_selector}")
+        
+        # 显示最近的标识符
+        if hasattr(self, '_current_element'):
+            identifiers = self._get_nearest_identifier(self._current_element)
+            if identifiers:
+                logger.info(f"         🏷️  最近的标识符:")
+                for identifier in identifiers[:3]:  # 显示最近的3个
+                    level_desc = "当前元素" if identifier['level'] == 0 else f"父级-{identifier['level']}"
+                    logger.info(f"             {level_desc}: <{identifier['tag']}> {identifier['type']}=\"{identifier['value']}\" → {identifier['selector']}")
         
         if position_info['text']:
             logger.info(f"         📝 文本: {position_info['text']}")
         
         # 显示class信息
         if position_info.get('classes_info'):
-            logger.info(f"         🏷️  Class信息:")
+            logger.info(f"         🏷️  Class层级信息:")
             for class_info in position_info['classes_info']:
                 logger.info(f"             {class_info['level']}: <{class_info['tag']}> class=\"{class_info['classes']}\"")
-        
-        if position_info.get('element_id'):
-            logger.info(f"         🆔 元素ID: {position_info['element_id']}")
         
         # 生成修复建议
         fix_suggestion = self.generate_fix_suggestion({
             'url': link_url,
-            'visual_position': position_info.get('visual_position', '')
+            'css_selector': css_selector,
+            'element_id': position_info.get('element_id', ''),
+            'classes_info': position_info.get('classes_info', []),
+            'visual_position': position_info['visual_position']
         })
         logger.info(f"         💡 修复建议: {fix_suggestion}")
         
@@ -924,6 +939,96 @@ class Link404Crawler:
         except Exception:
             return ''
     
+    def _generate_enhanced_css_selector(self, element):
+        """生成增强的CSS选择器，优先使用最近的class或id"""
+        try:
+            # 首先尝试找到最近的有意义的ID或class
+            current = element
+            selectors = []
+            
+            # 检查当前元素
+            if current.get('id'):
+                return f"#{current['id']}"
+            
+            # 检查当前元素的class
+            classes = current.get('class', [])
+            if classes:
+                # 优先使用有意义的class
+                meaningful_classes = [c for c in classes if len(c) > 2 and not c.startswith('_')]
+                if meaningful_classes:
+                    return f".{meaningful_classes[0]}"
+            
+            # 向上查找父级元素的ID或有意义的class
+            level = 0
+            while current and current.name and level < 3:
+                if current.get('id'):
+                    parent_selector = f"#{current['id']}"
+                    if selectors:
+                        return f"{parent_selector} {' '.join(reversed(selectors))}"
+                    else:
+                        return f"{parent_selector} {element.name}"
+                
+                parent_classes = current.get('class', [])
+                if parent_classes:
+                    meaningful_classes = [c for c in parent_classes if len(c) > 2 and not c.startswith('_')]
+                    if meaningful_classes:
+                        parent_selector = f".{meaningful_classes[0]}"
+                        if selectors:
+                            return f"{parent_selector} {' '.join(reversed(selectors))}"
+                        else:
+                            return f"{parent_selector} {element.name}"
+                
+                # 添加当前标签到选择器路径
+                tag_selector = current.name
+                if current.get('class'):
+                    # 只添加第一个class
+                    tag_selector += f".{current['class'][0]}"
+                selectors.append(tag_selector)
+                
+                current = current.parent
+                level += 1
+            
+            # 如果没有找到ID或有意义的class，返回标签路径
+            return ' > '.join(reversed(selectors[-3:])) if selectors else element.name
+            
+        except Exception:
+            return self._generate_css_selector(element)  # 回退到原方法
+    
+    def _get_nearest_identifier(self, element):
+        """获取最近的ID或class标识符"""
+        identifiers = []
+        current = element
+        level = 0
+        
+        while current and current.name and level < 5:
+            # 检查ID
+            if current.get('id'):
+                identifiers.append({
+                    'type': 'id',
+                    'value': current['id'],
+                    'selector': f"#{current['id']}",
+                    'level': level,
+                    'tag': current.name
+                })
+            
+            # 检查有意义的class
+            classes = current.get('class', [])
+            meaningful_classes = [c for c in classes if len(c) > 2 and not c.startswith('_') and not c.isdigit()]
+            
+            for cls in meaningful_classes[:2]:  # 最多取前两个有意义的class
+                identifiers.append({
+                    'type': 'class',
+                    'value': cls,
+                    'selector': f".{cls}",
+                    'level': level,
+                    'tag': current.name
+                })
+            
+            current = current.parent
+            level += 1
+        
+        return identifiers
+    
     def _generate_xpath(self, element):
         """生成XPath路径"""
         try:
@@ -996,6 +1101,9 @@ class Link404Crawler:
         """生成修复建议"""
         url = link_info.get('url', '')
         position = link_info.get('visual_position', '')
+        css_selector = link_info.get('css_selector', '')
+        element_id = link_info.get('element_id', '')
+        classes_info = link_info.get('classes_info', [])
         
         suggestions = []
         
@@ -1017,6 +1125,17 @@ class Link404Crawler:
         elif '侧边栏' in position:
             suggestions.append('更新侧边栏组件')
         
+        # 基于CSS选择器的技术建议
+        if css_selector:
+            if '#' in css_selector:
+                suggestions.append(f'使用ID选择器定位: document.querySelector("{css_selector}")')
+            elif '.' in css_selector:
+                suggestions.append(f'使用类选择器定位: document.querySelector("{css_selector}")')
+        
+        # 基于元素ID的建议
+        if element_id:
+            suggestions.append(f'通过元素ID定位: document.getElementById("{element_id}")')
+        
         # 通用建议
         suggestions.extend([
             '检查目标页面是否存在',
@@ -1024,11 +1143,68 @@ class Link404Crawler:
             '确认链接目标是否已迁移'
         ])
         
-        return '; '.join(suggestions[:3])  # 返回前3个建议
+        return '; '.join(suggestions[:4])  # 返回前4个建议
+
+def load_config_from_file(config_file="config.json"):
+    """从配置文件加载配置"""
+    try:
+        if not os.path.exists(config_file):
+            logger.warning(f"配置文件 {config_file} 不存在，将使用交互式配置")
+            return None
+        
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config_data = json.load(f)
+        
+        logger.info(f"✅ 成功加载配置文件: {config_file}")
+        return config_data
+        
+    except Exception as e:
+        logger.error(f"❌ 读取配置文件失败: {e}")
+        return None
 
 def get_user_config():
-    """获取用户配置"""
-    print("\n🔧 404链接检测工具配置")
+    """获取用户配置 - 支持配置文件和交互式输入"""
+    # 首先尝试从配置文件加载
+    config_data = load_config_from_file()
+    
+    if config_data:
+        print("\n🔧 404链接检测工具 - 配置文件模式")
+        print("=" * 50)
+        
+        # 兼容 route 和 path_filter 字段
+        path_filter = config_data.get('route') or config_data.get('path_filter')
+        
+        # 没有预设，使用默认配置
+        config = {
+            'domain': config_data.get('domain', 'www.example.com'),
+            'path_filter': path_filter,  # 使用 route 或 path_filter
+            'max_pages': config_data.get('max_pages', 50),
+            'max_workers': config_data.get('max_workers', 5),
+            'delay': config_data.get('delay', 1.0)
+        }
+        print("\n✅ 使用配置文件中的配置")
+        
+        # 显示最终配置
+        print("\n📋 当前配置:")
+        print(f"🌐 目标域名: {config['domain']}")
+        print(f"📁 路径筛选: {config['path_filter'] if config['path_filter'] else '无（检测所有页面）'}")
+        print(f"📄 最大页面数: {config['max_pages']}")
+        print(f"🔄 并发线程数: {config['max_workers']}")
+        print(f"⏱️ 请求延迟: {config['delay']}秒")
+        
+        confirm = input("\n✅ 确认开始检测？(y/n，默认y): ").strip().lower()
+        if confirm in ['n', 'no']:
+            print("❌ 用户取消检测")
+            return None
+        
+        return config
+    else:
+        # 配置文件不存在或读取失败，使用交互式配置
+        return get_interactive_config()
+
+def get_interactive_config():
+    """交互式获取用户配置（原有的配置方式）"""
+    print("\n🔧 404链接检测工具 - 交互式配置")
     print("=" * 50)
     
     # 获取目标域名
@@ -1060,7 +1236,6 @@ def get_user_config():
     path_filter = None
     if filter_choice == 2:
         path_filter = '/au'
-        print("✅ 已选择澳洲站点，将只检测 /au 路径下的页面")
     elif filter_choice == 3:
         path_filter = '/products'
     elif filter_choice == 4:

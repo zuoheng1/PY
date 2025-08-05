@@ -1,0 +1,20 @@
+# PDF转Word工具依赖
+
+# 方法1: pdf2docx（推荐）
+pdf2docx>=0.5.6
+
+# 方法2: PyPDF2 + python-docx
+PyPDF2>=3.0.1
+python-docx>=0.8.11
+
+# 方法3: OCR识别
+PyMuPDF>=1.23.0
+pytesseract>=0.3.10
+Pillow>=10.0.0
+
+# 通用依赖
+argparse
+pathlib
+logging
+datetime
+typing
